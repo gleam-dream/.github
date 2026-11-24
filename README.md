@@ -11,8 +11,11 @@ on hex.pm with a second factor.
 
 ### Cutting a release
 
-1. Run `scripts/release <version>` on a clean, current `main`. It opens the
-   version-bump pull request and stops there.
+1. On a clean, current `main`, run
+   `nix run github:gleam-dream/.github#release -- <version>`, or
+   `-- <package> <version>` for a package that is not at the repository root.
+   It opens the version-bump pull request and stops there. Nix supplies every
+   tool it calls; `gh` uses your own GitHub login.
 2. Review and merge the pull request.
 3. Pull `main`, confirm its head is the merge commit, and tag it:
    `v<version>` for the package at the repository root, or
