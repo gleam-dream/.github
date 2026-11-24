@@ -35,102 +35,16 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Resolve the package from the tag
-        id: package
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          if [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$ ]]; then
-            version="${BASH_REMATCH[1]}"
-            manifest=gleam.toml
-          elif [[ "$TAG" =~ ^([a-z][a-z0-9_]*)-v([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$ ]]; then
-            wanted="${BASH_REMATCH[1]}"
-            version="${BASH_REMATCH[2]}"
-            manifest=""
-            while IFS= read -r candidate; do
-              if grep -qE "^name *= *\"$wanted\"" "$candidate"; then
-                [[ -z "$manifest" ]] || { echo "::error::Two manifests are named $wanted: $manifest and $candidate"; exit 1; }
-                manifest="$candidate"
-              fi
-            done < <(git ls-files 'gleam.toml' '*/gleam.toml')
-            [[ -n "$manifest" ]] || { echo "::error::No gleam.toml in this repository is named $wanted"; exit 1; }
-          else
-            echo "::error::Tag $TAG is neither v<version> nor <package>-v<version>"
-            exit 1
-          fi
-          name="$(sed -nE 's/^name *= *"([^"]+)".*/\1/p' "$manifest" | head -n 1)"
-          declared="$(sed -nE 's/^version *= *"([^"]+)".*/\1/p' "$manifest" | head -n 1)"
-          if [[ "$declared" != "$version" ]]; then
-            echo "::error::Tag $TAG names version $version, but $manifest declares $declared"
-            exit 1
-          fi
-          {
-            echo "name=$name"
-            echo "version=$version"
-            echo "directory=$(dirname "$manifest")"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Require the tagged commit on the default branch
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          set -euo pipefail
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH"; then
-            echo "::error::Commit $GITHUB_SHA is not on $DEFAULT_BRANCH. Tag the merge commit of the release pull request."
-            exit 1
-          fi
-
-      - name: Require a version Hex does not list yet
-        env:
-          NAME: ${{ steps.package.outputs.name }}
-          VERSION: ${{ steps.package.outputs.version }}
-        run: |
-          set -euo pipefail
-          status="$(curl -sS -o /dev/null -w '%{http_code}' "https://hex.pm/api/packages/$NAME/releases/$VERSION")"
-          case "$status" in
-            404) ;;
-            200) echo "::error::Hex already lists $NAME $VERSION"; exit 1 ;;
-            *) echo "::error::Hex answered $status for $NAME $VERSION"; exit 1 ;;
-          esac
-
       - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31
 
-      - name: Publish
-        working-directory: ${{ steps.package.outputs.directory }}
+      # Every tool the checks and the upload call comes from this
+      # repository's flake at the commit named here. To change the
+      # application, merge the change first, then move this commit.
+      - name: Check the tag and publish
         env:
+          TAG: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           HEXPM_API_KEY: ${{ secrets.HEXPM_API_KEY }}
-        run: |
-          set -euo pipefail
-          # `--yes` leaves one prompt for versions below 1.0.0, and Gleam
-          # exits 0 when that prompt is declined, so the output is checked.
-          printf 'I am not using semantic versioning\n' \
-            | nix develop "$GITHUB_WORKSPACE" --command gleam publish --yes 2>&1 \
-            | tee "$RUNNER_TEMP/publish.log"
-          if grep -q 'Not publishing' "$RUNNER_TEMP/publish.log"; then
-            echo "::error::Gleam declined to publish"
-            exit 1
-          fi
-
-      - name: Report where the release stands
-        env:
-          NAME: ${{ steps.package.outputs.name }}
-          VERSION: ${{ steps.package.outputs.version }}
-        run: |
-          set -euo pipefail
-          status=000
-          for _ in 1 2 3 4 5 6; do
-            status="$(curl -sS -o /dev/null -w '%{http_code}' "https://hex.pm/api/packages/$NAME/releases/$VERSION")"
-            [[ "$status" == 200 ]] && break
-            sleep 10
-          done
-          if [[ "$status" == 200 ]]; then
-            echo "$NAME $VERSION is public: https://hex.pm/packages/$NAME/$VERSION" >> "$GITHUB_STEP_SUMMARY"
-          else
-            {
-              echo "$NAME $VERSION was uploaded and Hex does not list it yet (status $status)."
-              echo "A maintainer approves it at https://hex.pm/dashboard with a second factor."
-              echo "Hex drops a staged release that is not approved within 7 days."
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "::notice::$NAME $VERSION waits for approval on hex.pm"
-          fi
+          TOOLING: github:gleam-dream/.github/4963fe0e5bc6f33f2406a61b4179f4773f220c1b
+        run: nix run "$TOOLING#hex-publish"
