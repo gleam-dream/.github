@@ -30,6 +30,21 @@
           ];
           text = builtins.readFile ./release/release.sh;
         };
+
+        # Checks a release tag and uploads the package it names. The shared
+        # workflow runs it; `nix` itself is the runner's, and Gleam comes
+        # from the caller's flake.
+        hex-publish = pkgs.writeShellApplication {
+          name = "hex-publish";
+          runtimeInputs = with pkgs; [
+            git
+            curl
+            gnused
+            gnugrep
+            coreutils
+          ];
+          text = builtins.readFile ./hex-publish/hex-publish.sh;
+        };
       });
 
       apps = forAllSystems (pkgs: {
@@ -37,6 +52,11 @@
           type = "app";
           program = "${self.packages.${pkgs.stdenv.hostPlatform.system}.release}/bin/release";
           meta.description = "Open the version-bump pull request for a Gleam package";
+        };
+        hex-publish = {
+          type = "app";
+          program = "${self.packages.${pkgs.stdenv.hostPlatform.system}.hex-publish}/bin/hex-publish";
+          meta.description = "Check a release tag and publish its Gleam package to Hex";
         };
       });
     };
